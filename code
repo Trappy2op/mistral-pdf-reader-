@@ -1,0 +1,155 @@
+import os
+import fitz  # PyMuPDF for PDF
+import faiss
+import numpy as np
+import torch
+from sentence_transformers import SentenceTransformer
+from llama_cpp import Llama
+
+from tkinter import *
+from tkinter import filedialog, messagebox, scrolledtext
+from tkinter.ttk import Checkbutton
+
+# ==============================
+# Model & RAG Setup
+# ==============================
+
+MODEL_PATH = "models/mistral/Mistral-7B-Instruct-v0.2.Q4_K_M.gguf"
+
+llm = Llama(
+    model_path=MODEL_PATH,
+    n_ctx=4096,
+    n_threads=os.cpu_count(),
+    n_gpu_layers=20,   # fits in 4GB VRAM
+    verbose=False
+)
+
+ROLE_INSTRUCTION = (
+    "You are SafetyHead, a strict and highly knowledgeable factory safety officer. "
+    "Answer only with safety rules, legal compliance, and corrective actions according to the Factory Act. "
+    "Do not provide cures or medical advice — focus only on prevention, compliance, and safety measures."
+)
+
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+dimension = embedder.get_sentence_embedding_dimension()
+index = faiss.IndexFlatL2(dimension)
+documents = []
+
+
+# ==============================
+# PDF + FAISS Functions
+# ==============================
+
+def load_pdf_chunks(pdf_path, chunk_size=300):
+    """Extract text and split into chunks"""
+    doc = fitz.open(pdf_path)
+    text = ""
+    for page in doc:
+        text += page.get_text("text") + "\n"
+
+    words = text.split()
+    chunks = [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
+    return chunks
+
+
+def add_to_faiss(chunks):
+    global documents
+    embeddings = embedder.encode(chunks)
+    index.add(np.array(embeddings, dtype=np.float32))
+    documents.extend(chunks)
+
+
+def retrieve_context(query, k=3):
+    """Retrieve top-k relevant chunks"""
+    if index.ntotal == 0:
+        return ""
+    q_emb = embedder.encode([query])
+    D, I = index.search(np.array(q_emb, dtype=np.float32), k)
+    return "\n".join([documents[i] for i in I[0] if i < len(documents)])
+
+
+# ==============================
+# Chat with Mistral
+# ==============================
+
+def get_response(prompt: str, use_rag=True) -> str:
+    rag_context = retrieve_context(prompt) if use_rag else ""
+    context = f"\nRelevant legal text:\n{rag_context}" if rag_context else ""
+
+    messages = [
+        {"role": "system", "content": ROLE_INSTRUCTION},
+        {"role": "user", "content": f"{prompt}{context}"}
+    ]
+
+    response = llm.chat(
+        messages=messages,
+        max_tokens=300,
+        temperature=0.3,
+        top_p=0.9
+    )
+    return response["choices"][0]["message"]["content"].strip()
+
+
+# ==============================
+# Tkinter GUI
+# ==============================
+
+class SafetyBotApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("SafetyHead - Factory Safety Assistant")
+        self.root.geometry("850x650")
+
+        # Upload PDF button
+        self.upload_btn = Button(root, text="Upload PDF", command=self.upload_pdf)
+        self.upload_btn.pack(pady=5)
+
+        # RAG toggle
+        self.use_rag = BooleanVar(value=True)
+        self.rag_checkbox = Checkbutton(root, text="Use RAG (PDF Knowledge Base)", variable=self.use_rag)
+        self.rag_checkbox.pack(pady=5)
+
+        # Chat display
+        self.chat_area = scrolledtext.ScrolledText(root, wrap=WORD, height=22)
+        self.chat_area.pack(padx=10, pady=10, fill=BOTH, expand=True)
+
+        # User input
+        entry_frame = Frame(root)
+        entry_frame.pack(fill=X, padx=10, pady=5)
+
+        self.entry = Entry(entry_frame, width=80)
+        self.entry.pack(side=LEFT, fill=X, expand=True)
+        self.entry.bind("<Return>", self.send_message)
+
+        self.send_btn = Button(entry_frame, text="Send", command=self.send_message)
+        self.send_btn.pack(side=RIGHT, padx=5)
+
+    def upload_pdf(self):
+        file_path = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
+        if file_path:
+            chunks = load_pdf_chunks(file_path)
+            add_to_faiss(chunks)
+            messagebox.showinfo("PDF Loaded", f"Added {len(chunks)} chunks to knowledge base.")
+
+    def send_message(self, event=None):
+        user_input = self.entry.get().strip()
+        if not user_input:
+            return
+        self.chat_area.insert(END, f"\nUser: {user_input}\n")
+        self.entry.delete(0, END)
+
+        try:
+            response = get_response(user_input, use_rag=self.use_rag.get())
+            self.chat_area.insert(END, f"SafetyHead: {response}\n")
+        except Exception as e:
+            self.chat_area.insert(END, f"Error: {e}\n")
+
+
+# ==============================
+# Run App
+# ==============================
+
+if __name__ == "__main__":
+    root = Tk()
+    app = SafetyBotApp(root)
+    root.mainloop()
