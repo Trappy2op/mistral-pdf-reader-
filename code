@@ -10,9 +10,7 @@ from tkinter import *
 from tkinter import filedialog, messagebox, scrolledtext
 from tkinter.ttk import Checkbutton
 
-# ==============================
 # Model & RAG Setup
-# ==============================
 
 MODEL_PATH = "models/mistral/Mistral-7B-Instruct-v0.2.Q4_K_M.gguf"
 
@@ -36,9 +34,7 @@ index = faiss.IndexFlatL2(dimension)
 documents = []
 
 
-# ==============================
 # PDF + FAISS Functions
-# ==============================
 
 def load_pdf_chunks(pdf_path, chunk_size=300):
     """Extract text and split into chunks"""
@@ -68,9 +64,7 @@ def retrieve_context(query, k=3):
     return "\n".join([documents[i] for i in I[0] if i < len(documents)])
 
 
-# ==============================
 # Chat with Mistral
-# ==============================
 
 def get_response(prompt: str, use_rag=True) -> str:
     rag_context = retrieve_context(prompt) if use_rag else ""
@@ -90,9 +84,7 @@ def get_response(prompt: str, use_rag=True) -> str:
     return response["choices"][0]["message"]["content"].strip()
 
 
-# ==============================
 # Tkinter GUI
-# ==============================
 
 class SafetyBotApp:
     def __init__(self, root):
@@ -145,9 +137,7 @@ class SafetyBotApp:
             self.chat_area.insert(END, f"Error: {e}\n")
 
 
-# ==============================
 # Run App
-# ==============================
 
 if __name__ == "__main__":
     root = Tk()
